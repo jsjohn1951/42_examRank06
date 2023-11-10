@@ -1,132 +1,134 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <unistd.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 
-void ft_putstr(int fd, char *s)
+fd_set current;
+fd_set toRead;
+fd_set toWrite;
+
+int count = 0;
+int clients[1025];
+int sock = 0;
+int maxFd = 0;
+
+char buffer[120000];
+
+void	ft_putstr(int fd, char *s)
 {
 	write(fd, s, strlen(s));
 }
 
-void	exitWithError(int code)
+void	exitWithError(int code, int fd)
 {
 	switch (code)
 	{
-		case -1 : ft_putstr(2, "Fatal Error\n"); break;
-		case 1 : ft_putstr(2, "Invalid Number of Arguments\n"); break;
+		case -1: ft_putstr(2, "Fatal error\n"); break ;
+		case 1: ft_putstr(2, "Wrong number of arguments\n"); break;
 		default: return ;
 	}
+	if (fd >= 0)
+		close (fd);
 	exit (1);
 }
 
-fd_set	current;
-fd_set	toRead;
-fd_set	toWrite;
-
-int		count = 0;
-int		port = 0;
-int		sock = 0;
-int		clients[1024];
-char	buffer[5000];
-
-void	init()
+void init (int port)
 {
-	struct	sockaddr_in	addr;
+	struct sockaddr_in addr;
 
-	addr. sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 
-	exitWithError(-(((sock = socket(AF_INET, SOCK_STREAM, 0))) < 0));
-	exitWithError(bind(sock, (struct sockaddr *) &addr, sizeof(addr)));
-	exitWithError(listen(sock, 10));
+	exitWithError((sock = socket(AF_INET, SOCK_STREAM, 0)), -1);
+	exitWithError(bind(sock, (struct sockaddr *) &addr, sizeof(addr)), sock);
+	exitWithError(listen(sock, 1024), sock);
+
 	FD_SET(sock, &current);
-	bzero(buffer, 5000);
+	maxFd = sock;
+	bzero (buffer, 120000);
 }
 
 void	sendAll (int avoid)
 {
-	for ( int i = 0; i < 1024; i++ )
+	for (int i = 0; i < (maxFd + 1); i++)
 	{
 		if (FD_ISSET(i, &toWrite) && i != sock && i != avoid)
-			send(i, buffer, strlen(buffer), 0);
+			send (i, buffer, strlen(buffer), 0);
 	}
-	bzero(buffer, 5000);
+	bzero (buffer, 120000);
 }
 
-void	acceptNewClient()
+void	acceptClient ()
 {
-	int fd = 0;
-
+	int	fd = 0;
 	if ((fd = accept(sock, NULL, NULL)) < 0)
 		return ;
 	FD_SET(fd, &current);
-
 	clients[fd] = count++;
 	sprintf(buffer, "server: client %d just arrived\n", clients[fd]);
-	sendAll(fd);
+	sendAll (fd);
+	maxFd = (maxFd > fd ? maxFd : fd);
 }
 
-int	checkClientLeft (int bytes, int fd)
-{
-	if (bytes > 0)
-		return (1);
-	sprintf(buffer, "server: client %d just left\n", clients[fd]);
-	sendAll(fd);
-	FD_CLR(fd, &current);
-	close (fd);
-	return (0);
-}
-
-void	start()
+void	run ()
 {
 	while (1)
 	{
-		int bytes = 0;
 		toRead = (toWrite = current);
-		
-		if (select(1023, &toRead, &toWrite, NULL, NULL) <= 0)
-			continue;
+		if (select(maxFd + 1, &toRead, &toWrite, NULL, NULL) <= 0)
+			continue ;
 
 		if (FD_ISSET(sock, &toRead))
 		{
-			acceptNewClient();
+			acceptClient ();
 			continue ;
 		}
 
-		for (int i = 0; i <= 1024; i++)
+		for (int i = 0; i < (maxFd + 1); i++)
+		{
 			if (FD_ISSET(i, &toRead))
 			{
-				char bufferTemp[5000];
-				int	pos = 0;
-				bzero(bufferTemp, 5000);
+				int bytes = 0;
+				int pos = 0;
+				char tempBuffer[120000];
 
-				if (!checkClientLeft((bytes = recv(i, bufferTemp, 4096, 0)), i))
+				bzero (tempBuffer, 120000);
+				bytes = recv(i, tempBuffer, 119999, 0);
+
+				if (bytes <= 0)
+				{
+					sprintf(buffer, "server: client %d just left\n", clients[i]);
+					sendAll (i);
+					close (i);
+					FD_CLR(i, &current);
 					break ;
+				}
+
 				for (int j = 0; j < bytes; j++)
 				{
-					if (bufferTemp[j] == '\n')
+					if (tempBuffer[j] == '\n')
 					{
-						bufferTemp[j] = '\0';
-						sprintf(buffer, "client %d: %s\n", clients[i], bufferTemp + pos);
-						sendAll(i);
+						tempBuffer[j] = '\0';
+						sprintf(buffer, "client %d: %s\n", clients[i], tempBuffer + pos);
+						sendAll (i);
 						pos = j + 1;
 					}
 				}
+
 				break ;
 			}
+		}
 	}
 }
 
 int main(int argc, char **argv)
 {
-	if (argc != 2)
-		exitWithError(1);
-	port = atoi(argv[1]);
-	init ();
-	start ();
+	exitWithError((argc != 2), -1);
+	init (atoi(argv[1]));
+	run ();
 	return (0);
 }
